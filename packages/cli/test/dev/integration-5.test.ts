@@ -1210,3 +1210,57 @@ describe('[vercel dev] Schedule-triggered JS job service', () => {
     }
   });
 });
+
+describe('[vercel dev] Schedule-triggered JS job service (dynamic)', () => {
+  const resultsDir = join(
+    __dirname,
+    'fixtures',
+    'services-cron-js-dynamic',
+    '.results'
+  );
+
+  beforeEach(async () => {
+    await fs.remove(resultsDir);
+  });
+
+  test('[vercel dev] trigger dynamic-schedule JS job via proxy', async () => {
+    const dir = fixture('services-cron-js-dynamic');
+    const { dev, port, readyResolver } = await testFixture(
+      dir,
+      {
+        skipNpmInstall: true,
+        env: {
+          VERCEL_USE_EXPERIMENTAL_SERVICES: '1',
+          VERCEL_USE_EXPERIMENTAL_FRAMEWORKS: '1',
+        },
+      },
+      ['--local']
+    );
+
+    try {
+      await readyResolver;
+
+      // For `<dynamic>` schedules, getInternalServiceCronPath uses each
+      // detected entry's handler name. The fixture's default export
+      // declares handlers `alpha` and `beta`; with entrypoint
+      // "cron/task.mjs" the paths resolve to:
+      //   /_svc/cron/crons/cron/task/alpha
+      //   /_svc/cron/crons/cron/task/beta
+      for (const handler of ['alpha', 'beta']) {
+        const res = await nodeFetch(
+          `http://localhost:${port}/_svc/cron/crons/cron/task/${handler}`,
+          { method: 'POST' }
+        );
+        expect(res.status).toBe(200);
+        expect(await res.json()).toHaveProperty('ok', true);
+
+        const markerPath = join(resultsDir, `${handler}.json`);
+        expect(await fs.pathExists(markerPath)).toBe(true);
+        const marker = await fs.readJson(markerPath);
+        expect(marker).toMatchObject({ executed: true, name: handler });
+      }
+    } finally {
+      await dev.kill();
+    }
+  });
+});
