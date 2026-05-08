@@ -40,13 +40,19 @@ export function buildCronRouteTable(
  * disk containing the bundled handler — so this function can `import()`
  * the entry and call its default export to discover entries. The caller
  * owns the directory's lifecycle (creation and cleanup).
+ *
+ * Dev passes in an optional `importer` to use a tsx-aware importer
+ * so .ts/.mts/.cts user files transpile transparently.
  */
+export type CronEntryImporter = (specifier: string) => Promise<unknown>;
+
 export async function getServiceCrons(opts: {
   service?: BuildOptions['service'];
   entrypoint?: string;
   bundle?: { dir: string; handler: string };
+  importer?: CronEntryImporter;
 }): Promise<BackendsCronEntry[] | undefined> {
-  const { service, entrypoint, bundle } = opts;
+  const { service, entrypoint, bundle, importer } = opts;
 
   if (!service || !isScheduleTriggeredService(service)) {
     return undefined;
@@ -69,6 +75,7 @@ export async function getServiceCrons(opts: {
       serviceName: service.name,
       entrypoint,
       bundle,
+      importer,
     });
   }
 
@@ -90,8 +97,9 @@ async function getServiceCronsDynamic(opts: {
   serviceName: string;
   entrypoint: string;
   bundle: { dir: string; handler: string };
+  importer?: CronEntryImporter;
 }): Promise<BackendsCronEntry[]> {
-  const detected = await detectDynamicCrons(opts.bundle);
+  const detected = await detectDynamicCrons(opts.bundle, opts.importer);
 
   if (detected.length === 0) {
     throw new Error(
@@ -117,14 +125,17 @@ async function getServiceCronsDynamic(opts: {
  * constraint the lambda has at cold-start, so any well-formed cron
  * entrypoint is teardown-clean).
  */
-async function detectDynamicCrons(bundle: {
-  dir: string;
-  handler: string;
-}): Promise<DetectedEntry[]> {
-  const entryAbs = join(bundle.dir, bundle.handler);
+async function detectDynamicCrons(
+  bundle: { dir: string; handler: string },
+  importer?: CronEntryImporter
+): Promise<DetectedEntry[]> {
   let userModule: unknown;
   try {
-    userModule = await import(pathToFileURL(entryAbs).toString());
+    const entrySpecifier = pathToFileURL(
+      join(bundle.dir, bundle.handler)
+    ).toString();
+    const importFn: CronEntryImporter = importer ?? (s => import(s));
+    userModule = await importFn(entrySpecifier);
   } catch (err) {
     throw new Error(
       `could not import cron entrypoint: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`

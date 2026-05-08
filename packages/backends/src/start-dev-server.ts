@@ -3,12 +3,6 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// Path to the host script (built by tsdown to dist/dev/cron-host.mjs).
-// Sibling of dist/index.mjs, which is where this module is bundled.
-const CRON_HOST_PATH = fileURLToPath(
-  new URL('./dev/cron-host.mjs', import.meta.url)
-);
-
 import {
   debug,
   FileBlob,
@@ -18,11 +12,25 @@ import {
   scanParentDirs,
   type StartDevServer,
 } from '@vercel/build-utils';
+import { tsImport } from 'tsx/esm/api';
 import { findEntrypointWithHintOrThrow } from './find-entrypoint.js';
 import { applyCronDispatch } from './cron-dispatch.js';
-import { buildCronRouteTable, getServiceCrons } from './crons.js';
+import {
+  buildCronRouteTable,
+  DYNAMIC_SCHEDULE,
+  getServiceCrons,
+} from './crons.js';
 import { spawnCronHost } from './dev/spawn-cron-host.js';
 import { resolveEntrypointAndFormat } from './rolldown/resolve-format.js';
+
+// Sibling of dist/index.mjs (where this module is bundled at runtime).
+const CRON_HOST_PATH = fileURLToPath(
+  new URL('./dev/cron-host.mjs', import.meta.url)
+);
+
+// Scoped tsx-aware importer for the user's cron entrypoint. No process-wide
+// side effects.
+const TS_IMPORTER = (specifier: string) => tsImport(specifier, import.meta.url);
 
 /**
  * Dev-mode entrypoint for `@vercel/backends`. For schedule-triggered
@@ -46,11 +54,6 @@ export const startDevServer: StartDevServer = async opts => {
     opts.entrypoint
   );
 
-  const cronEntries = await getServiceCrons({ service, entrypoint });
-  if (!cronEntries) {
-    return null;
-  }
-
   const userModuleAbs = join(workPath, entrypoint);
   if (!existsSync(userModuleAbs)) {
     throw new NowBuildError({
@@ -62,6 +65,20 @@ export const startDevServer: StartDevServer = async opts => {
   // Install user deps if the orchestrator requested it.
   if (meta.syncDependencies) {
     await maybeInstallDeps(workPath);
+  }
+
+  const cronEntries = await getServiceCrons(
+    service.schedule === DYNAMIC_SCHEDULE
+      ? {
+          service,
+          entrypoint,
+          bundle: { dir: workPath, handler: entrypoint },
+          importer: TS_IMPORTER,
+        }
+      : { service, entrypoint }
+  );
+  if (!cronEntries) {
+    return null;
   }
 
   // For dev we host the shim out of a tmp dir, so we override the user module
@@ -115,11 +132,11 @@ export const startDevServer: StartDevServer = async opts => {
 
   child.stdout?.on('data', (chunk: Buffer) => {
     if (onStdout) onStdout(chunk);
-    else process.stdout.write(chunk);
+    else process.stdout.write(chunk as Uint8Array);
   });
   child.stderr?.on('data', (chunk: Buffer) => {
     if (onStderr) onStderr(chunk);
-    else process.stderr.write(chunk);
+    else process.stderr.write(chunk as Uint8Array);
   });
 
   // Surface early-exit failures so they don't manifest as a port
