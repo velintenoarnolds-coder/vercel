@@ -1,5 +1,15 @@
 # vercel
 
+## 54.1.0
+
+### Minor Changes
+
+- e8deaa1: Rename `vercel connex` command to `vercel connect`. The command remains gated behind the existing `FF_CONNEX_ENABLED` flag.
+
+### Patch Changes
+
+- @vercel/node@5.8.1
+
 ## 54.0.0
 
 ### Major Changes
